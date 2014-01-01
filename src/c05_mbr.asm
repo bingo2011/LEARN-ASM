@@ -32,7 +32,7 @@
     mov byte [es:0x18], ':'
     mov byte [es:0x19], 0x07
 
-    mov ax, number               ;取得标号number的偏移地址
+    mov ax, number               ;取得标号number的偏移地址, AX在后面将作为被除数使用
     mov bx, 10                   ;设置除数为10
 
     ;设置数据段的基地址，数据段和代码段指向同一个段
