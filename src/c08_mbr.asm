@@ -1,6 +1,8 @@
         app_lba_start equ 100                        ;声明常数(用户程序起始逻辑扇区号)
                                                      ;常数的声明不会占用汇编地址
-SECTION mbr align=16 vstart=0x7c00
+
+SECTION mbr align=16 vstart=0x7c00                   ;段内的汇编地址都将从0x7c00开始计算，
+													 ;主要是影响标号处的汇编地址
 
         ;设置堆栈段和栈指针
         mov ax, 0
@@ -20,6 +22,56 @@ SECTION mbr align=16 vstart=0x7c00
         mov si, app_lba_start                        ;程序在硬盘上的起始逻辑扇区号
         xor bx, bx                                   ;加载到DS:0x0000处
         call read_hard_disk_0
+
+        ;以下判断整个程序有多大
+        mov dx, [2]                                  ;dx:ax保存着从扇区中读取的程序长度
+        mov ax, [0]
+        mov bx, 512                                  ;512字节每扇区
+        div bx
+        cmp dx, 0
+        jnz @1                       				 ;未除尽，跳转
+        dec ax                                       ;除尽，因为已经读了一个扇区，扇区总数减1
+
+@1:
+		cmp ax, 0                                    ;考虑程序的实际长度小于或者等于512个字节的情况
+		jz direct
+
+		;读取剩余的扇区
+		push ds                                      ;以下要用到并改变DS寄存器
+
+		mov cx, ax                                   ;循环次数(剩余扇区数)
+@2:
+		mov ax, ds                                   ;每次将DS后移512字节，存放下一个扇区
+		add ax, 0x20                                 ;得到下一个以512字节为边界的段地址
+		mov ds, ax
+
+		xor bx, bx                                   ;每次读硬盘的时候，偏移地址始终为0x0000
+		inc si                                       ;下一个逻辑扇区
+		call read_hard_disk_0
+		loop @2                                      ;循环读，直到读完整个功能程序
+
+		pop ds                                       ;恢复数据段基址到用户程序头部段
+
+		;计算入口点代码段基址
+direct:
+		mov dx, [0x08]                               ;代码段基址的高字节
+		mov ax, [0x06]                               ;低字节
+		call calc_segment_base
+		mov [0x06], ax                               ;回填修正后的入口点代码段基址
+
+	    ;开始处理段重定位表
+	    mov cx, [0x0a]                               ;需要重定位的表项数目
+	    mov bx, [0x0c]                               ;重定位表首地址
+
+realloc:
+		mov dx, [bx+0x02]                            ;32位地址的高16位
+		mov ax, [bx]                                 ;低16位
+		call calc_segment_base
+		mov [bx], ax                                 ;回填重定位后的段基址
+		add bx, 4                                    ;下一个重定位项(每项占4个字节)
+		loop realloc
+
+		jmp far [0x04]                               ;转移到用户程序的入口点
 
 read_hard_disk_0:                                    ;从硬盘读取一个逻辑扇区
 													 ;输入： DI:SI=起始逻辑扇区号
@@ -47,7 +99,7 @@ read_hard_disk_0:                                    ;从硬盘读取一个逻�
 
 		inc dx                                       ;0x1f6
 		mov al, 0xe0                                 ;LBA28模式，主盘
-		or  al, ah                                   ;LBA地址27～24
+		or  al, ah                                   ;LBA地址27～24，ah中存着di的高4位
 		out dx, al
 
 		inc dx                                       ;0x1f7
@@ -76,8 +128,27 @@ read_hard_disk_0:                                    ;从硬盘读取一个逻�
 
 		ret
 
+calc_segment_base:                                   ;计算重定位后的16位段地址
+													 ;输入: DX:AX=32物理地址
+													 ;返回: AX=16位段基地址
+		push dx
+
+		add ax, [cs:phy_base]
+		adc dx, [cs:phy_base+0x02]                   ;带进位加法，计算重定位后的段的物理地址，包括偏移地址
+
+		shr ax, 4                                    ;去除偏移地址
+		ror dx, 4                                    ;将低4位循环放到高4位
+		and dx, 0xf000                               ;仅保留高4位，其余位清零
+		or  ax, dx                                   ;计算出重定位后的16位段地址
+
+		pop dx
+
+		ret
+
         phy_base dd 0x10000                          ;用户程序被加载的物理起始地址
 
+times   510 - ($ - $$) db 0
+					   db 0x55, 0xaa
 
 
 
